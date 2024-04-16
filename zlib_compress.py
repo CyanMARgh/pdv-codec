@@ -1,14 +1,8 @@
 #!/bin/python3
 import sys
 import zlib
-from time import sleep
 
-decompressed_data = sys.stdin.buffer.read()
-compressed_data = zlib.compress(decompressed_data, 1)
-sys.stdout.buffer.write(compressed_data)
-
-# sys.stdout.buffer.write(b'bruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruhbruh');
-
+sys.stdout.buffer.write(zlib.compress(sys.stdin.buffer.read(), 1))
 
 # Yes, that's all the python script does. I thought about using gzip or something similar,
 # but their compression results are slightly different and I honestly don't understand why.
