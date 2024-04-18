@@ -12,6 +12,10 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #define ERROR(args...) {fprintf(stderr, args); exit(1);}
 
 
@@ -21,7 +25,13 @@
 #define PTRCAST(T, val) *(T*)&(val)
 
 typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint16_t u16;
+typedef uint8_t u8;
 typedef int64_t s64;
+typedef int32_t s32;
+typedef int16_t s16;
+typedef int8_t s8;
 
 typedef struct {
 	char* data;
@@ -83,15 +93,14 @@ void reset_string(Dynamic_String *str) {
 	str->allocated = 0;
 }
 
-uint32_t rgba_to_argb(uint32_t x) {
-	x = (x << 16) | ((x >> 16) & 0xffff);
-	return (x << 8) | ((x >> 8) & 0xff);
+u32 rgba_to_argb(u32 x) {
+	return ((x << 24) & 0xff000000) | ((x << 8) & 0x00ff0000) | ((x >> 8) & 0x0000ff00) | ((x >> 24) & 0x000000ff);
 }
 
 #define MAX_MASKS 16
 typedef struct {
-	uint32_t masks[MAX_MASKS];
-	uint64_t patterns[MAX_MASKS];
+	u32 masks[MAX_MASKS];
+	u64 patterns[MAX_MASKS];
 
 	int count; 
 } Masks_Set;
@@ -100,39 +109,6 @@ void write_entire_file(char* filename, String str) {
 	FILE *fd = fopen(filename,"wb");
 	fwrite(str.data, str.count, 1, fd);
 	fclose(fd);
-}
-
-#define FRAME_WIDTH 400
-#define FRAME_HEIGHT 240
-#define PACKED_IMAGE_SIZE (FRAME_WIDTH * FRAME_HEIGHT / 8)
-
-String prepare_frame(char* filename, Masks_Set masks_set) {
-	uint32_t W, H, channels;
-	uint32_t *img = (uint32_t*)stbi_load(filename, &W, &H, &channels, 4);
-	if(img == NULL) ERROR("can't open file: %s\n", filename);
-
-	if(W != FRAME_WIDTH || H != FRAME_HEIGHT) {
-		ERROR("frame has invalid dimensions: %dx%d\n", W, H);
-	}
-
-	uint8_t *packed_image = (uint8_t*)malloc(PACKED_IMAGE_SIZE);
-	memset(packed_image, 0, PACKED_IMAGE_SIZE);
-
-	for(int y = 0, i = 0; y < H; y += 1) {
-		for(int x = 0; x < W; x += 1, i += 1) {
-			uint32_t pixel = img[i];
-			for(int m = 0; m < masks_set.count; m++) {
-				if(pixel == masks_set.masks[m]) {
-					uint8_t p = (masks_set.patterns[m] >> ((y & 3) << 3)) & 0xff;
-					packed_image[i / 8] |= (128 >> (x & 7)) & p;
-					break;
-				}
-			}
-		}
-	}
-	stbi_image_free(img);
-
-	return (String){packed_image, PACKED_IMAGE_SIZE};
 }
 
 int write_all(s64 fd, String str) {
@@ -163,7 +139,6 @@ String read_all(int fd) {
 	}
 	return str.view;
 }
-
 String compress(String msg) {
 	int inpipefd[2];
 	int outpipefd[2];
@@ -199,8 +174,72 @@ String compress(String msg) {
 	return result;
 }
 
+#define FRAME_WIDTH 400
+#define FRAME_HEIGHT 240
+#define PACKED_FRAME_SIZE (FRAME_WIDTH * FRAME_HEIGHT / 8)
+
+String prepare_frame(char* filename, Masks_Set masks_set) {
+	u32 W, H, channels;
+	u32 *img = (u32*)stbi_load(filename, &W, &H, &channels, 4);
+	if(img == NULL) ERROR("can't open file: %s\n", filename);
+
+	if(W != FRAME_WIDTH || H != FRAME_HEIGHT) {
+		ERROR("frame has invalid dimensions: %dx%d\n", W, H);
+	}
+
+	u8 *packed_image = (u8*)malloc(PACKED_FRAME_SIZE);
+	memset(packed_image, 0, PACKED_FRAME_SIZE);
+
+	for(int y = 0, i = 0; y < H; y += 1) {
+		for(int x = 0; x < W; x += 1, i += 1) {
+			u32 pixel = img[i];
+			for(int m = 0; m < masks_set.count; m++) {
+				if(pixel == masks_set.masks[m]) {
+					u8 p = (masks_set.patterns[m] >> ((y & 3) << 3)) & 0xff;
+					packed_image[i / 8] |= (128 >> (x & 7)) & p;
+					break;
+				}
+			}
+		}
+	}
+	stbi_image_free(img);
+
+	return (String){packed_image, PACKED_FRAME_SIZE};
+}
+
+void process_image(char* dstname, char* srcname, Masks_Set masks_set) {
+	u32 W, H, channels;
+	u32 *img = (u32*)stbi_load(srcname, &W, &H, &channels, 4);
+	if(img == NULL) ERROR("can't open file: %s\n", srcname);
+
+	if(W != FRAME_WIDTH || H != FRAME_HEIGHT) {
+		ERROR("frame has invalid dimensions: %dx%d\n", W, H);
+	}
+
+	for(int y = 0, i = 0; y < H; y += 1) {
+		for(int x = 0; x < W; x += 1, i += 1) {
+			u32 pixel = img[i];
+			img[i] = (pixel & 0xff000000) ? 0xff000000 : 0x00000000;
+			for(int m = 0; m < masks_set.count; m++) {
+				if(pixel == masks_set.masks[m]) {
+					u8 p = (masks_set.patterns[m] >> ((y & 7) << 3));
+					img[i] = ((128 >> (x & 7)) & p) ? 0xffffffff : 0xff000000;
+					break;
+				}
+			}
+		}
+	}
+	int r = stbi_write_png(dstname, W, H, 4, img, W * 4);
+	if(!r) {
+		ERROR("unable to save file: %s", dstname);
+	}
+
+	stbi_image_free(img);
+}
+
 #define APPEND_PLAIN_DATA(dst, value) append_data(dst, (void*)&value, sizeof(value))
-#define MAGIC "Playdate VID"
+#define MAGIC_PDV "Playdate VID"
+#define MAGIC_PDI "Playdate IMG"
 
 #define MAX_FILENAME_SIZE 1024
 
@@ -221,13 +260,13 @@ if(!strcmp(arg, "-" P)) {\
 }
 
 int main(int argc, char **argv) {
-	uint16_t begin_index = 1;
+	u16 begin_index = 1;
 	char *filename_fmt = "okgowtf/frame_%04d.png";
 	char *result_filename = "result.pdv";
-	uint16_t frames_count = 0;
+	u16 frames_count = 0;
 	bool print_output = true;
 	bool make_file = true;
-
+	bool just_image = false;
 	Masks_Set masks_set = {{0xffffffff}, {0xffffffffffffffff}, 0};
 
 	for(int i = 1; i < argc; i++) {
@@ -237,32 +276,27 @@ int main(int argc, char **argv) {
 			if(sscanf(next, "%hu", &begin_index) != 1) {
 				ERROR("can't parse begin index: %s", next);
 			}
-			// printf("begin index: %d\n", begin_index);
 		);
 		PARAMETER_BLOCK("n",
 			if(sscanf(next, "%hu", &frames_count) != 1) {
 				ERROR("can't parse frames count: %s", next);
 			}
-			// printf("frames count: %d\n", frames_count);
 		);
 		PARAMETER_BLOCK("f",
 			filename_fmt = next
-			// printf("files format: %s\n", filename_fmt);
 		);
 		PARAMETER_BLOCK("m",
-			uint32_t color, p1, p2;
+			u32 color, p1, p2;
 			if(sscanf(next, "%08x:%08x%08x", &color, &p1, &p2) != 3) {
 				ERROR("can't parse %s in format xxxxxxxx:xxxxxxxxxxxxxxxx (8x : 16x)\n", next);
 			}
-			// else {
-			// 	printf("color: %08x, pattern: %16lx\n", color, (((uint64_t)p1) << 32) | ((uint32_t)p2));
-			// }
 			if(masks_set.count == MAX_MASKS) {
 				ERROR("too much mask parameters.\n");
 			}
 
 			masks_set.masks[masks_set.count] = rgba_to_argb(color);
-			masks_set.patterns[masks_set.count] = (((uint64_t)p1) << 32) | ((uint32_t)p2);
+			u64 p12 = (((u64)p1) << 32) | ((u64)p2);
+			masks_set.patterns[masks_set.count] = p12;
 			masks_set.count += 1;
 		);
 		PARAMETER_BLOCK("o",
@@ -275,72 +309,80 @@ int main(int argc, char **argv) {
 			print_output = false;
 			make_file = false;
 		);
+		PARAMETER_BLOCK_MONO("i",
+			just_image = true;
+		);
 
 		ERROR("unexpected argument: %s\n", arg);
 	}
 
 	if(!masks_set.count) masks_set.count = 1;
 
-	String* frames = (String*)malloc(sizeof(String) * frames_count);
-	uint32_t* offsets = (uint32_t*)malloc(sizeof(uint32_t) * (frames_count + 1));
-
-	for(int i = 0; i < frames_count; i++) {
-		char filename[MAX_FILENAME_SIZE];
-		int r = snprintf(filename, MAX_FILENAME_SIZE, filename_fmt, i + begin_index);
-		if(r >= MAX_FILENAME_SIZE || r <= 0) ERROR("format generated invalid name\n");
-		if(print_output && ((i + 1) % 10 == 0 || frames_count <= 20)) printf("preparing frame: %s\n", filename);
-		String packed_frame = prepare_frame(filename, masks_set);
-
-		frames[i] = compress(packed_frame);
-
-		free_string(packed_frame);
-	}
-	if(print_output) printf("prepering done\n");
-
-	offsets[0] = 0;
-	for(int i = 0; i < frames_count; i++) {
-		offsets[i + 1] = offsets[i] + frames[i].count;
-	}
-	for(int i = 0; i <= frames_count; i++) {
-		offsets[i] = (offsets[i] << 2) | (i == frames_count ? 0 : 1);
-	}
-
-	Dynamic_String pdv_file = {0};
-
-	{
-		uint32_t pad_u32 = 0;
-		uint16_t pad_u16 = 0;
-		float framerate = 15.0;
-		uint16_t width = FRAME_WIDTH;
-		uint16_t height = FRAME_HEIGHT;
-
-		append_c_string(&pdv_file, MAGIC);
-		APPEND_PLAIN_DATA(&pdv_file, pad_u32);
-		APPEND_PLAIN_DATA(&pdv_file, frames_count);
-		APPEND_PLAIN_DATA(&pdv_file, pad_u16);
-		APPEND_PLAIN_DATA(&pdv_file, framerate);
-		APPEND_PLAIN_DATA(&pdv_file, width);
-		APPEND_PLAIN_DATA(&pdv_file, height);		
-	}
-	if(print_output) printf("header done\n");
-
-
-	append_data(&pdv_file, (void*)offsets, sizeof(uint32_t) * (frames_count + 1));
-	free(offsets);
-	if(print_output) printf("offsets done\n");
-
-	for(int i = 0; i < frames_count; i++) {
-		append_string(&pdv_file, frames[i]);
-		free_string(frames[i]);
-	}
-	free(frames);
-	if(print_output) printf("frames done\n");
-
-	if(make_file) {
-		write_entire_file(result_filename, pdv_file.view);
+	if(just_image) {
+		u32 W, H, stride, size;
+		process_image(result_filename, filename_fmt, masks_set);
 	} else {
-		write(STDOUT_FILENO, pdv_file.data, pdv_file.count);
+		Dynamic_String file_content = {0};
+		String* frames = (String*)malloc(sizeof(String) * frames_count);
+		u32* offsets = (u32*)malloc(sizeof(u32) * (frames_count + 1));
+
+		for(int i = 0; i < frames_count; i++) {
+			char filename[MAX_FILENAME_SIZE];
+			int r = snprintf(filename, MAX_FILENAME_SIZE, filename_fmt, i + begin_index);
+			if(r >= MAX_FILENAME_SIZE || r <= 0) ERROR("format generated invalid / too large name\n");
+			if(print_output && ((i + 1) % 10 == 0 || frames_count <= 20)) printf("preparing frame: %s\n", filename);
+
+			String packed_frame = prepare_frame(filename, masks_set);
+			String compressed_frame = compress(packed_frame);
+			free_string(packed_frame);
+
+			frames[i] = compressed_frame;
+		}
+		if(print_output) printf("prepering done\n");
+
+		offsets[0] = 0;
+		for(int i = 0; i < frames_count; i++) {
+			offsets[i + 1] = offsets[i] + frames[i].count;
+		}
+		for(int i = 0; i <= frames_count; i++) {
+			offsets[i] = (offsets[i] << 2) | (i == frames_count ? 0 : 1);
+		}
+
+		{
+			u32 pad_u32 = 0;
+			u16 pad_u16 = 0;
+			float framerate = 15.0;
+			u16 width = FRAME_WIDTH;
+			u16 height = FRAME_HEIGHT;
+
+			append_c_string(&file_content, MAGIC_PDV);
+			APPEND_PLAIN_DATA(&file_content, pad_u32);
+			APPEND_PLAIN_DATA(&file_content, frames_count);
+			APPEND_PLAIN_DATA(&file_content, pad_u16);
+			APPEND_PLAIN_DATA(&file_content, framerate);
+			APPEND_PLAIN_DATA(&file_content, width);
+			APPEND_PLAIN_DATA(&file_content, height);		
+		}
+		if(print_output) printf("header done\n");
+
+		append_data(&file_content, (void*)offsets, sizeof(u32) * (frames_count + 1));
+		free(offsets);
+		if(print_output) printf("offsets done\n");
+
+		for(int i = 0; i < frames_count; i++) {
+			append_string(&file_content, frames[i]);
+			free_string(frames[i]);
+		}
+		free(frames);
+		if(print_output) printf("frames done\n");
+
+		if(make_file) {
+			write_entire_file(result_filename, file_content.view);
+		} else {
+			write(STDOUT_FILENO, file_content.data, file_content.count);
+		}
+		free_dynamic_string(file_content);
 	}
-	free_dynamic_string(pdv_file);
+
 	return 0;
 }
