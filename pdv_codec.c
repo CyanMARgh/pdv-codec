@@ -1,6 +1,5 @@
 #include <unistd.h>
 #include <sys/wait.h>
-#include <sys/prctl.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +8,8 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <stdint.h>
+#include <sys/prctl.h>
+
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -150,7 +151,7 @@ String compress(String msg) {
 		dup2(outpipefd[0], STDIN_FILENO);
 		dup2(inpipefd[1], STDOUT_FILENO);
 
-		prctl(PR_SET_PDEATHSIG, SIGTERM);
+		// prctl(PR_SET_PDEATHSIG, SIGTERM);
 
 		close(outpipefd[1]);
 		close(inpipefd[0]);
@@ -167,6 +168,9 @@ String compress(String msg) {
 	close(outpipefd[1]);
 
 	String result = read_all(inpipefd[0]);
+	if(result.count == 1 && result.data[0] == '-') {
+		ERROR("python script raised an exception (probably zlib is not installed)");
+	}
 	int status;
 	waitpid(pid, &status, 0);
 	close(inpipefd[0]);

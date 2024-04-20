@@ -1,8 +1,10 @@
 #!/bin/python3
-import sys
-import zlib
-
-sys.stdout.buffer.write(zlib.compress(sys.stdin.buffer.read(), 1))
+try:
+	import sys
+	import zlib
+	sys.stdout.buffer.write(zlib.compress(sys.stdin.buffer.read(), 1))
+except:
+	print("-")
 
 # Yes, that's all the python script does. I thought about using gzip or something similar,
 # but their compression results are slightly different and I honestly don't understand why.
