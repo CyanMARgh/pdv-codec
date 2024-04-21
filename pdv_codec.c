@@ -216,10 +216,6 @@ void process_image(char* dstname, char* srcname, Masks_Set masks_set) {
 	u32 *img = (u32*)stbi_load(srcname, &W, &H, &channels, 4);
 	if(img == NULL) ERROR("can't open file: %s\n", srcname);
 
-	if(W != FRAME_WIDTH || H != FRAME_HEIGHT) {
-		ERROR("frame has invalid dimensions: %dx%d\n", W, H);
-	}
-
 	for(int y = 0, i = 0; y < H; y += 1) {
 		for(int x = 0; x < W; x += 1, i += 1) {
 			u32 pixel = img[i];
